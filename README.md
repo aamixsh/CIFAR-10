@@ -12,7 +12,7 @@ Dependencies:
 
 To run the program for Question 1, just run,
 ```
-	python q1.py
+python q1.py
 ```
 on the terminal in the *src* folder and follow instructions.
 
