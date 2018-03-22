@@ -16,17 +16,24 @@ import tensorflow as tf
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 
-# Creates subdirectories if not present in a path.
-def createPath(output):
-	if not os.path.exists(os.path.dirname(output)):
+
+def create_path(output):
+	"""
+	Create subdirectories if not present in a path.
+	"""
+
+	if not os.path.exists(output):
 		try:
-			os.makedirs(os.path.dirname(output))
+			os.makedirs(output)
 		except OSError as exc:
 			if exc.errorno!=errorno.EEXIST:
 				raise
 
-# Main function.
+
 if __name__ == '__main__':
+	"""
+	Main function.
+	"""
 	
 	# Input.
 	a, b = [], []
@@ -57,12 +64,12 @@ if __name__ == '__main__':
 
 	# Write output to file.
 	path = "../data/output/q1/"
+	create_path(path)
+
 	if choice in ['d', 'D']:
 		path += "output_input1.txt"
 	else:
 		path += "output_"+filename+".txt"
-
-	createPath(path)
 
 	file = open(path, "w")
 	sys.stdout = file
