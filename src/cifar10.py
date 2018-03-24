@@ -12,6 +12,7 @@ Q.2
 
 import os
 import sys
+import time
 import pickle
 import urllib
 import random
@@ -130,6 +131,10 @@ def load_batch_data(filename):
     x = scaled_image_data.reshape([-1, num_channels, image_size, image_size])
     scaled_image_data = np.transpose(x, (0, 2, 3, 1))
     
+    # Making lists from np arrays.
+    scaled_image_data = [x for x in scaled_image_data]
+    image_labels = [x for x in image_labels]
+
     return scaled_image_data, image_labels
 
 
@@ -146,22 +151,19 @@ def read_data(directory):
         print (str(i)+". "+class_names[i])
     
     # Load training data in batches.
-    train_images = np.zeros(shape=[num_train_batches*num_images_per_batch, image_size, image_size, num_channels], dtype=float)
-    train_labels = np.zeros(shape=[num_train_batches*num_images_per_batch, num_classes], dtype=int)
+    train_images = []
+    train_labels = []
 
     print ("\nLoading training images...")
     start = 0
     for i in range(num_train_batches):
         
         images_batch, label_batch = load_batch_data(os.path.join(directory, "data_batch_"+str(i+1)))
-        end = start + num_images_per_batch
 
         # Appending batch data to the pool.
-        train_images[start:end, :] = images_batch
-        train_labels[start:end, :] = label_batch
+        train_images.extend(images_batch)
+        train_labels.extend(label_batch)
         print("Done for this batch.")
-
-        start = end
 
     print ("Done.")
     print ("\nNow loading test images...")
@@ -176,17 +178,23 @@ def next_batch():
     Returns the next batch from training data.
     """
     
-    global train_images, train_labels
+    global train_images_epoch, train_labels_epoch
     # Shuffle the original list. 
-    combined = list(zip(train_images, train_labels))
-    random.shuffle(combined)
-    train_images[:], train_labels[:] = zip(*combined)
+
+    percentage = float(((num_images_per_batch*num_train_batches)-len(train_images_epoch))/(num_images_per_batch*num_train_batches))*100
+    print ("Training for this epoch: "+str(percentage)+"%", end="\r")
+
+    if not train_images_epoch:
+        return None, None
     
     next_batch_images = []
     next_batch_labels = []
     for i in range(batch_size):
-        next_batch_images.append(train_images.pop())
-        next_batch_labels.append(train_labels.pop())
+        next_batch_images.append(train_images_epoch.pop())
+        next_batch_labels.append(train_labels_epoch.pop())
+
+    next_batch_images = np.array(next_batch_images)
+    next_batch_labels = np.array(next_batch_labels)
 
     return next_batch_images, next_batch_labels
 
@@ -230,8 +238,8 @@ def train_cnn(x):
     """
 
     prediction = cnn(x)
-    
-    cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=prediction, labels=y))
+        
+    cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=prediction, labels=y))
     optimizer = tf.train.AdamOptimizer().minimize(cost)
     
     num_epochs = 5
@@ -239,13 +247,26 @@ def train_cnn(x):
         sess.run(tf.global_variables_initializer())
 
         for epoch in range(num_epochs):
+            
             epoch_loss = 0
-            for _ in range(num_images_per_batch):
-                epoch_x, epoch_y = next_batch()
+            i = 0
+            start_time = time.time()
+
+            while i < len(train_images):
+                start = i
+                end = i + batch_size
+
+                epoch_x = np.array(train_images[start:end])
+                epoch_y = np.array(train_labels[start:end])
                 _, c = sess.run([optimizer, cost], feed_dict={x: epoch_x, y: epoch_y})
                 epoch_loss += c
 
-            print('Epoch', epoch, 'completed out of '+str(num_epochs)+', loss:',epoch_loss)
+                percentage = float(end/num_train_batches/num_images_per_batch)*100
+                print ("Training for this epoch: {0:.2f} %".format(round(percentage, 2)), end="\r")
+
+                i = end
+
+            print('Epoch', epoch+1, 'completed out of '+str(num_epochs)+' in '+str(time.time()-start_time)+' s, loss:',epoch_loss)
 
         correct = tf.equal(tf.argmax(prediction, 1), tf.argmax(y, 1))
         accuracy = tf.reduce_mean(tf.cast(correct, 'float'))
@@ -276,11 +297,22 @@ if __name__ == '__main__':
 
     # Unpickle Data.
     train_images, train_labels, test_images, test_labels = read_data(os.path.join(input_data_path,"cifar-10-batches-py"))
+    test_images = np.array(test_images)
 
-    x = tf.placeholder(tf.float32, shape=[batch_size, image_size, image_size, num_channels])
-    y = tf.placeholder(tf.float32, shape=[batch_size, num_classes])
+    # Shuffle Data.
+    combined = list(zip(train_images, train_labels))
+    random.shuffle(combined)
+    train_images[:], train_labels[:] = zip(*combined)
+
+    # Lists used per epoch.
+    train_images_epoch = train_images
+    train_labels_epoch = train_labels
+
+    x = tf.placeholder(tf.float32, shape=[None, image_size, image_size, num_channels])
+    y = tf.placeholder(tf.float32, shape=[None, num_classes])
 
     # Train Data.
+    print ("\nNow training...")
     train_cnn(x)
 
 # End.
