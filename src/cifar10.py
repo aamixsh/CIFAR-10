@@ -32,11 +32,15 @@ conv_stride = 1             # conv = convolution.
 mp_stride = 2
 fc_size = 1024              # fc = fully connected.
 batch_size = 100
+num_epochs = 100
 num_filters = 32
 num_channels = 3
 num_classes = 10
 num_train_batches = 5
 num_images_per_batch = 10000
+
+config = tf.ConfigProto()
+config.gpu_options.allow_growth = True
 
 # Code starts here.
 
@@ -173,32 +177,40 @@ def read_data(directory):
     return train_images, train_labels, test_images, test_labels
 
 
-def next_batch():
-    """
-    Returns the next batch from training data.
-    """
-    
-    global train_images_epoch, train_labels_epoch
-    # Shuffle the original list. 
+# def initialize_batch_norm(scope, depth):
+#     with tf.variable_scope(scope) as bnscope:
+#         gamma = tf.get_variable("gamma", shape[-1], initializer=tf.constant_initializer(1.0))
+#         beta = tf.get_variable("beta", shape[-1], initializer=tf.constant_initializer(0.0))
+#         moving_avg = tf.get_variable("moving_avg", shape[-1], initializer=tf.constant_initializer(0.0), trainable=False)
+#         moving_var = tf.get_variable("moving_var", shape[-1], initializer=tf.constant_initializer(1.0), trainable=False)
+#         bnscope.reuse_variables()
 
-    percentage = float(((num_images_per_batch*num_train_batches)-len(train_images_epoch))/(num_images_per_batch*num_train_batches))*100
-    print ("Training for this epoch: "+str(percentage)+"%", end="\r")
 
-    if not train_images_epoch:
-        return None, None
-    
-    next_batch_images = []
-    next_batch_labels = []
-    for i in range(batch_size):
-        next_batch_images.append(train_images_epoch.pop())
-        next_batch_labels.append(train_labels_epoch.pop())
+# def BatchNorm_layer(x, scope, train, epsilon=0.001, decay=.99):
+#     # Perform a batch normalization after a conv layer or a fc layer
+#     # gamma: a scale factor
+#     # beta: an offset
+#     # epsilon: the variance epsilon - a small float number to avoid dividing by 0
+#     with tf.variable_scope(scope, reuse=tf.AUTO_REUSE):
+#         with tf.variable_scope('BatchNorm', reuse=True) as bnscope:
+#             gamma, beta = tf.get_variable("gamma"), tf.get_variable("beta")
+#             moving_avg, moving_var = tf.get_variable("moving_avg"), tf.get_variable("moving_var")
+#             shape = x.get_shape().as_list()
+#             control_inputs = []
+#             if train:
+#                 avg, var = tf.nn.moments(x, range(len(shape)-1))
+#                 update_moving_avg = moving_averages.assign_moving_average(moving_avg, avg, decay)
+#                 update_moving_var = moving_averages.assign_moving_average(moving_var, var, decay)
+#                 control_inputs = [update_moving_avg, update_moving_var]
+#             else:
+#                 avg = moving_avg
+#                 var = moving_var
+#             with tf.control_dependencies(control_inputs):
+#                 output = tf.nn.batch_normalization(x, avg, var, offset=beta, scale=gamma, variance_epsilon=epsilon)
+#     return output
 
-    next_batch_images = np.array(next_batch_images)
-    next_batch_labels = np.array(next_batch_labels)
 
-    return next_batch_images, next_batch_labels
-
-def cnn(x):
+def cnn(x, is_training):
     """
     Creates the Convolutional Neural Network Model.
     """
@@ -218,7 +230,7 @@ def cnn(x):
     
     conv_layer = tf.nn.relu(conv_layer)
 
-    # insert batch normalization here.
+    # conv_layer = tf.layers.batch_normalization(conv_layer, training=is_training)
 
     conv_layer = tf.nn.max_pool(conv_layer, ksize=[1, mp_size, mp_size, 1], strides=[1, mp_stride, mp_stride, 1], padding='SAME')
     
@@ -232,18 +244,17 @@ def cnn(x):
     return output
 
 
-def train_cnn(x):
+def train_cnn(x, is_training):
     """
     Train the CNN.
     """
 
-    prediction = cnn(x)
+    prediction = cnn(x, is_training)
         
     cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=prediction, labels=y))
     optimizer = tf.train.AdamOptimizer().minimize(cost)
     
-    num_epochs = 5
-    with tf.Session() as sess:
+    with tf.Session(config = config) as sess:
         sess.run(tf.global_variables_initializer())
 
         for epoch in range(num_epochs):
@@ -258,7 +269,7 @@ def train_cnn(x):
 
                 epoch_x = np.array(train_images[start:end])
                 epoch_y = np.array(train_labels[start:end])
-                _, c = sess.run([optimizer, cost], feed_dict={x: epoch_x, y: epoch_y})
+                _, c = sess.run([optimizer, cost], feed_dict={x: epoch_x, y: epoch_y, is_training: True})
                 epoch_loss += c
 
                 percentage = float(end/num_train_batches/num_images_per_batch)*100
@@ -266,11 +277,29 @@ def train_cnn(x):
 
                 i = end
 
-            print('Epoch', epoch+1, 'completed out of '+str(num_epochs)+' in '+str(time.time()-start_time)+' s, loss:',epoch_loss)
+            saver = tf.train.Saver()
+            saver.save(sess, '../data/output/CIFAR/model/model_'+str(time.time()))
 
-        correct = tf.equal(tf.argmax(prediction, 1), tf.argmax(y, 1))
-        accuracy = tf.reduce_mean(tf.cast(correct, 'float'))
-        print('Accuracy:',accuracy.eval({x: test_images, y: test_labels}))
+            print('Epoch', epoch+1, 'completed out of '+str(num_epochs)+' in '+str(time.time()-start_time)+' s, loss:',epoch_loss)
+            correct = tf.equal(tf.argmax(prediction, 1), tf.argmax(y, 1))
+            accuracy = tf.reduce_mean(tf.cast(correct, 'float'))
+            print ("Testing...")
+            i = 0
+            n = 0
+            acc = 0.0
+            while i < len(test_images):
+                start = i
+                end = i + batch_size
+
+                epoch_x = np.array(test_images[start:end])
+                epoch_y = np.array(test_labels[start:end])
+                acc += accuracy.eval({x: epoch_x, y: epoch_y, is_training: False})
+
+                print ("Accuracy: ", acc, end='\r') 
+                i = end
+                n += 1
+
+            print ("Accuracy: ", acc)
 
 
 if __name__ == '__main__':
@@ -297,22 +326,21 @@ if __name__ == '__main__':
 
     # Unpickle Data.
     train_images, train_labels, test_images, test_labels = read_data(os.path.join(input_data_path,"cifar-10-batches-py"))
-    test_images = np.array(test_images)
+    # test_images = np.array(test_images)
+    # test_labels = np.array(test_labels)
 
     # Shuffle Data.
     combined = list(zip(train_images, train_labels))
     random.shuffle(combined)
     train_images[:], train_labels[:] = zip(*combined)
-
-    # Lists used per epoch.
-    train_images_epoch = train_images
-    train_labels_epoch = train_labels
+    del combined
 
     x = tf.placeholder(tf.float32, shape=[None, image_size, image_size, num_channels])
     y = tf.placeholder(tf.float32, shape=[None, num_classes])
+    is_training = tf.placeholder(tf.bool)
 
     # Train Data.
     print ("\nNow training...")
-    train_cnn(x)
+    train_cnn(x, is_training)
 
 # End.
