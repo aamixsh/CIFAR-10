@@ -26,11 +26,13 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '1'
 input_data_path = "../data/input/CIFAR"
 output_data_path = "../data/output/CIFAR"
 image_size = 32
-filter_size = 7
+filter_size = 5
+filter_size2 = 3
 mp_size = 2                 # mp = max pooling.
 conv_stride = 1             # conv = convolution.
 mp_stride = 2
 fc_size = 1024              # fc = fully connected.
+fc_size2 = 4096
 batch_size = 100
 num_epochs = 100
 num_filters = 32
@@ -216,35 +218,60 @@ def cnn(x, is_training):
     """
 
     # Weights to be used in the CNN.
-    weights = {'w_conv': tf.Variable(tf.truncated_normal([filter_size, filter_size, num_channels, num_filters], stddev=0.5)),
+    weights = { 'w_conv': tf.Variable(tf.truncated_normal([filter_size, filter_size, num_channels, num_filters], stddev=0.5)),
+                'w_conv2': tf.Variable(tf.truncated_normal([filter_size2, filter_size2, num_filters, num_filters], stddev=0.5)),
+                'w_conv3': tf.Variable(tf.truncated_normal([filter_size2, filter_size2, num_filters, num_filters], stddev=0.5)),
                 # Pooling reduces size by (mp_stride * mpstride).
-               'w_fc': tf.Variable(tf.truncated_normal([int(image_size*image_size*num_filters/mp_stride/mp_stride), fc_size], stddev=0.5)), 
-               'w_out': tf.Variable(tf.truncated_normal([fc_size, num_classes], stddev=0.5))}
+                'w_fc': tf.Variable(tf.truncated_normal([int(image_size*image_size*num_filters/mp_stride**2/mp_stride**2), fc_size], stddev=0.5)), 
+                'w_fc2': tf.Variable(tf.truncated_normal([fc_size, fc_size2], stddev=0.5)), 
+                'w_out': tf.Variable(tf.truncated_normal([fc_size2, num_classes], stddev=0.5))}
     
     # Biases to be used in the CNN.
-    biases = {'b_conv': tf.Variable(tf.truncated_normal([num_filters], stddev=0.5)),
-               'b_fc': tf.Variable(tf.truncated_normal([fc_size], stddev=0.5)),
-               'b_out': tf.Variable(tf.truncated_normal([num_classes], stddev=0.5))}
+    biases = {  'b_conv': tf.Variable(tf.truncated_normal([num_filters], stddev=0.5)),
+                'b_conv2': tf.Variable(tf.truncated_normal([num_filters], stddev=0.5)),
+                'b_conv3': tf.Variable(tf.truncated_normal([num_filters], stddev=0.5)),
+                'b_fc': tf.Variable(tf.truncated_normal([fc_size], stddev=0.5)),
+                'b_fc2': tf.Variable(tf.truncated_normal([fc_size2], stddev=0.5)),
+                'b_out': tf.Variable(tf.truncated_normal([num_classes], stddev=0.5))}
 
     conv_layer = tf.nn.conv2d(x, weights['w_conv'], strides=[1, conv_stride, conv_stride, 1], padding='SAME') + biases['b_conv']
     
-    # conv_layer = tf.contrib.layers.batch_norm(conv_layer, is_training=is_training)
-
     conv_layer = tf.nn.relu(conv_layer)
+
+    conv_layer = tf.nn.lrn(conv_layer, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name='conv_layer')
 
     conv_layer = tf.nn.max_pool(conv_layer, ksize=[1, mp_size, mp_size, 1], strides=[1, mp_stride, mp_stride, 1], padding='SAME')
     
-    fc = tf.reshape(conv_layer, [-1, int(image_size*image_size*num_filters/mp_stride/mp_stride)])
+    conv_layer2 = tf.nn.conv2d(conv_layer, weights['w_conv2'], strides=[1, conv_stride, conv_stride, 1], padding='SAME') + biases['b_conv2']
+
+    conv_layer2 = tf.nn.relu(conv_layer2)
+
+    conv_layer2 = tf.nn.lrn(conv_layer2, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name='conv_layer2')
+
+    conv_layer3 = tf.nn.conv2d(conv_layer2, weights['w_conv3'], strides=[1, conv_stride, conv_stride, 1], padding='SAME') + biases['b_conv3']
+
+    conv_layer3 = tf.nn.relu(conv_layer3)
+
+    conv_layer3 = tf.nn.lrn(conv_layer2, 4, bias=1.0, alpha=0.001 / 9.0, beta=0.75, name='conv_layer3')
+
+    conv_layer3 = tf.nn.max_pool(conv_layer3, ksize=[1, mp_size, mp_size, 1], strides=[1, mp_stride, mp_stride, 1], padding='SAME')
+
+    fc = tf.reshape(conv_layer3, [-1, int(image_size*image_size*num_filters/mp_stride**2/mp_stride**2)])
+
     fc = tf.matmul(fc, weights['w_fc']) + biases['b_fc']
     
     fc = tf.nn.relu(fc)
 
-    output = tf.matmul(fc, weights['w_out']) + biases['b_out']
+    fc2 = tf.matmul(fc, weights['w_fc2']) + biases['b_fc2']
+    
+    fc2 = tf.nn.relu(fc2)
+
+    output = tf.matmul(fc2, weights['w_out']) + biases['b_out']
 
     return output
 
 
-def train_cnn(x, is_training):
+def train_cnn(x, is_training, learning_rate=0.0001):
     """
     Train the CNN.
     """
@@ -252,7 +279,7 @@ def train_cnn(x, is_training):
     prediction = cnn(x, is_training)
         
     cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(logits=prediction, labels=y))
-    optimizer = tf.train.AdamOptimizer().minimize(cost)
+    optimizer = tf.train.AdamOptimizer(learning_rate).minimize(cost)
     
     with tf.Session(config = config) as sess:
         sess.run(tf.global_variables_initializer())
@@ -273,14 +300,15 @@ def train_cnn(x, is_training):
                 epoch_loss += c
 
                 percentage = float(end/num_train_batches/num_images_per_batch)*100
-                print ("Training for this epoch: {0:.2f} %".format(round(percentage, 2)), end="\r")
+                print ("Training for this epoch: {0:.2f}%".format(round(percentage, 2)), end="\r")
 
                 i = end
 
-            saver = tf.train.Saver()
-            saver.save(sess, '../data/output/CIFAR/model/model_'+str(time.time()))
+            # saver = tf.train.Saver()
+            # saver.save(sess, '../data/output/CIFAR/model/model_'+str(time.time()))
 
-            print('Epoch', epoch+1, 'completed out of '+str(num_epochs)+' in '+str(time.time()-start_time)+' s, loss:',epoch_loss)
+            print('Epoch', epoch+1, 'completed out of '+str(num_epochs), end=' ')
+            print('in {0:.2f}s, loss:'.format(round(time.time()-start_time, 2)),epoch_loss)
             correct = tf.equal(tf.argmax(prediction, 1), tf.argmax(y, 1))
             accuracy = tf.reduce_mean(tf.cast(correct, 'float'))
             print ("Testing...")
