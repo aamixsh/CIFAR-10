@@ -176,8 +176,12 @@ def read_data(directory):
     return train_images, train_labels, test_images, test_labels
 
 
-# for batch normalisation
+
 def batchnorm(Ylogits, is_test, iteration, offset, convolutional=False):
+    """
+    For batch normalization of conv_layer.
+    """
+
     exp_moving_avg = tf.train.ExponentialMovingAverage(0.999, iteration)  # adding the iteration prevents from averaging across non-existing iterations
     bnepsilon = 1e-5
     if convolutional:
